@@ -24,7 +24,7 @@ class BookingController extends Controller
      * BookingController constructor.
      * @param BookingRepository $bookingRepository
      */
-    public function __construct(BookingRepository $bookingRepository)
+    public function __construct(BookingRepository $bookingRepository, NotificationService $notificationService)
     {
         $this->repository = $bookingRepository;
     }
@@ -35,14 +35,16 @@ class BookingController extends Controller
      */
     public function index(Request $request)
     {
-        if($user_id = $request->get('user_id')) {
+        $response = [];
 
-            $response = $this->repository->getUsersJobs($user_id);
+        $adminRoleIds = [env('ADMIN_ROLE_ID'), env('SUPERADMIN_ROLE_ID')];
 
-        }
-        elseif($request->__authenticatedUser->user_type == env('ADMIN_ROLE_ID') || $request->__authenticatedUser->user_type == env('SUPERADMIN_ROLE_ID'))
-        {
+        if (in_array($request->__authenticatedUser->user_type, $adminRoleIds)) {
             $response = $this->repository->getAll($request);
+        }
+
+        if ($user_id = $request->get('user_id')) {
+            $response = $this->repository->getUsersJobs($user_id);
         }
 
         return response($response);
@@ -70,7 +72,6 @@ class BookingController extends Controller
         $response = $this->repository->store($request->__authenticatedUser, $data);
 
         return response($response);
-
     }
 
     /**
@@ -107,13 +108,13 @@ class BookingController extends Controller
      */
     public function getHistory(Request $request)
     {
-        if($user_id = $request->get('user_id')) {
+        $user_id = $request->get('user_id');
 
-            $response = $this->repository->getUsersJobsHistory($user_id, $request);
-            return response($response);
-        }
+        if (! $user_id) return null;
 
-        return null;
+        $response = $this->repository->getUsersJobsHistory($user_id, $request);
+
+        return response($response);
     }
 
     /**
@@ -165,7 +166,6 @@ class BookingController extends Controller
         $response = $this->repository->endJob($data);
 
         return response($response);
-
     }
 
     public function customerNotCall(Request $request)
@@ -175,7 +175,6 @@ class BookingController extends Controller
         $response = $this->repository->customerNotCall($data);
 
         return response($response);
-
     }
 
     /**
@@ -217,12 +216,12 @@ class BookingController extends Controller
         }
 
         if ($data['flagged'] == 'true') {
-            if($data['admincomment'] == '') return "Please, add comment";
+            if ($data['admincomment'] == '') return "Please, add comment";
             $flagged = 'yes';
         } else {
             $flagged = 'no';
         }
-        
+
         if ($data['manually_handled'] == 'true') {
             $manually_handled = 'yes';
         } else {
@@ -248,7 +247,6 @@ class BookingController extends Controller
         if ($admincomment || $session || $flagged || $manually_handled || $by_admin) {
 
             $affectedRows1 = Job::where('id', '=', $jobid)->update(array('admin_comments' => $admincomment, 'flagged' => $flagged, 'session_time' => $session, 'manually_handled' => $manually_handled, 'by_admin' => $by_admin));
-
         }
 
         return response('Record updated!');
@@ -277,18 +275,22 @@ class BookingController extends Controller
      * @param Request $request
      * @return \Illuminate\Contracts\Routing\ResponseFactory|\Symfony\Component\HttpFoundation\Response
      */
-    public function resendSMSNotifications(Request $request)
+    public function resendSMSNotifications(JobSmsNotificationRequest $request)
     {
-        $data = $request->all();
-        $job = $this->repository->find($data['jobid']);
+        $data = $request->validated();
+
+        $job = $this->repository->findOrFail($data['jobid']);
+
         $job_data = $this->repository->jobToData($job);
 
         try {
-            $this->repository->sendSMSNotificationToTranslator($job);
+            // Can Send to service
+            $this->notificationService->handle(new SmsNotification($job_data));
             return response(['success' => 'SMS sent']);
         } catch (\Exception $e) {
-            return response(['success' => $e->getMessage()]);
+            return response(['success' => false, 'message' => $e->getMessage()], $e->getCode());
         }
-    }
 
+        return response(['success' => false, 'message' => 'Internal Server Error'], 500);
+    }
 }
